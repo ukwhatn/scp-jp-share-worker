@@ -3,7 +3,9 @@
 	"version": "0.0.0",
 	"private": true,
 	"scripts": {
-		"deploy": "wrangler deploy",
+		"upload-assets": "for file in r2/bgs/*; do wrangler r2 object put scp-jp-share-worker-ogp/bgs/$(basename \"$file\") --file \"$file\" --remote; done && for file in r2/fonts/*; do wrangler r2 object put scp-jp-share-worker-ogp/fonts/$(basename \"$file\") --file \"$file\" --remote; done",
+		"deploy": "npm run upload-assets && wrangler deploy",
+		"deploy-only": "wrangler deploy",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
 		"test": "vitest",

@@ -107,7 +107,7 @@ const OGP_VARIANTS: OGPVariants = {
  * フォントサイズ計算や行分割で使用する共通オプション。
  */
 const FONT_OPTIONS = {
-	maxWidth: 1100,         // テキスト表示領域の最大幅 (px)
+	maxWidth: 700,         // テキスト表示領域の最大幅 (px)
 	avgCharWidthRatio: 0.7, // フォントサイズに対する平均的な文字幅の比率（経験則に基づく調整値）
 };
 
@@ -128,7 +128,15 @@ const handler: Handler = {
 		// =============================================
 		if (pathname === '/image') {
 			// --- キャッシュの確認 ---
-			const cacheKey = new URL(request.url).toString();
+			const fullUrl = new URL(request.url).toString();
+			// URLが長すぎる場合に備えてハッシュ化
+			const encoder = new TextEncoder();
+			const data = encoder.encode(fullUrl);
+			const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+			const hashArray = Array.from(new Uint8Array(hashBuffer));
+			const cacheKey = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+			// `nocache=true` が指定されているかどうかを確認
 			const noCacheFlag = searchParams.get("nocache") === "true";
 
 			// `nocache=true` が指定されていない場合、まずR2のキャッシュを確認
@@ -146,22 +154,47 @@ const handler: Handler = {
 			}
 
 			// --- リクエストパラメータの解析 ---
-			const paramTitle = searchParams.get("title");
-			if (!paramTitle || paramTitle.length === 0) {
-				return new Response("Title is required", {status: 400});
+			const paramPage = searchParams.get("page");
+
+			// ページにアクセスして #page-title のinnerText を取得する
+			if (!paramPage || paramPage.length === 0) {
+				return new Response("Page parameter is required", {status: 400});
 			}
+			// ページタイトルを取得するためのURLを構築
+			const pageUrl = `http://pseudo-scp-jp.wikidot.com/${encodeURIComponent(paramPage)}`;
+			const pageResponse = await fetch(pageUrl);
+			if (!pageResponse.ok) {
+				return new Response(`Failed to fetch page: ${pageUrl}`, {status: pageResponse.status});
+			}
+			const pageText = await pageResponse.text();
+			// ページのHTMLからタイトルを抽出
+			/*
+                        <div id="page-title">
+                            Share X Normal
+                        </div>
+			 */
+			const titleMatch = pageText.match(/<div id="page-title">\s*([^<]+)\s*<\/div>/);
+			if (!titleMatch || titleMatch.length < 2) {
+				return new Response("Failed to extract page title", {status: 500});
+			}
+			// ページタイトルを取得
+			const pageTitle = titleMatch[1].trim();
+			// ページタイトルをエスケープしてHTML特殊文字を処理
+			const escapedTitle = escapeHtml(pageTitle);
+			// ページタイトルをログに出力
+			console.log(`Extracted page title: "${escapedTitle}"`);
 
 			// SCP記事のタイトル形式 (`SCP-xxxx-JP - ZZZZZ`) を特別扱いし、
 			// 番号部分 (title) と副題部分 (subtitle) に分割する
 			const scpTitleRegex = /^(SCP-\d{3,4}-JP) - (.+)/;
-			const isSCPTitle = scpTitleRegex.test(paramTitle);
+			const isSCPTitle = scpTitleRegex.test(escapedTitle);
 			let title, subtitle;
 			if (isSCPTitle) {
-				const match = paramTitle.match(scpTitleRegex);
+				const match = escapedTitle.match(scpTitleRegex);
 				title = match![1];
 				subtitle = match![2];
 			} else {
-				title = paramTitle;
+				title = escapedTitle;
 				subtitle = searchParams.get("subtitle");
 			}
 
@@ -170,6 +203,8 @@ const handler: Handler = {
 			if (!(variant in OGP_VARIANTS)) {
 				return new Response("Variant not found", {status: 404});
 			}
+
+			console.log(`Generating OGP image for title: "${title}", subtitle: "${subtitle || ''}", variant: "${variant}"`);
 
 			// --- アセットの取得 (フォントと背景) ---
 			// メモリキャッシュを確認し、なければR2から取得する
@@ -223,7 +258,7 @@ const handler: Handler = {
 						display: "flex",
 						justifyContent: "center",
 						alignItems: "center",
-						backgroundImage: `url(data:image/png;base64,${btoa(String.fromCharCode(...new Uint8Array(backgroundImageBuf)))})`,
+						backgroundImage: `url(data:image/png;base64,${btoa(Array.from(new Uint8Array(backgroundImageBuf), byte => String.fromCharCode(byte)).join(''))})`,
 						backgroundSize: "cover",
 						backgroundPosition: "center",
 					}}
@@ -260,6 +295,8 @@ const handler: Handler = {
 							<div style={{
 								display: "flex",
 								flexDirection: "column",
+								alignItems: "center",
+								justifyContent: "center",
 								fontSize: `${subtitleFontSize}px`,
 								lineHeight: "1.3",
 								marginTop: "24px",
@@ -309,8 +346,6 @@ const handler: Handler = {
 		// ==================================================
 		if (pathname === '/share') {
 			const page = searchParams.get('page');
-			const title = searchParams.get('title');
-			const subtitle = searchParams.get('subtitle');
 			const variant = searchParams.get('variant') || 'normal';
 
 			// リダイレクト先のページ指定は必須
@@ -319,15 +354,8 @@ const handler: Handler = {
 			}
 
 			// OGP画像のURLを動的に構築
-			let ogImageUrl = null;
-			if (title) {
-				let url = `${origin}/image?title=${encodeURIComponent(title)}`;
-				if (subtitle) {
-					url += `&subtitle=${encodeURIComponent(subtitle)}`;
-				}
-				url += `&variant=${encodeURIComponent(variant)}`;
-				ogImageUrl = url;
-			}
+			let ogImageUrl = `${origin}/image?page=${encodeURIComponent(page)}`;
+			ogImageUrl += `&variant=${encodeURIComponent(variant)}`;
 
 			// リダイレクト先のWikidot URLを構築
 			const redirectUrl = `http://scp-jp.wikidot.com/${page}`;
@@ -338,7 +366,7 @@ const handler: Handler = {
             <meta property="og:image:width" content="1200" />
             <meta property="og:image:height" content="630" />
             <meta name="twitter:card" content="summary_large_image" />
-            <meta name="twitter:title" content="${escapeHtml(title || '')}" />
+            <meta name="twitter:title" content="SCP財団Wiki 日本語版" />
             <meta name="twitter:image" content="${ogImageUrl}" />` : '';
 
 			// OGPタグとリダイレクト用スクリプトを含んだHTMLを生成
@@ -348,7 +376,7 @@ const handler: Handler = {
           <head>
             <meta charset="UTF-8">
             <title>リダイレクト中...</title>
-            <meta property="og:title" content="${escapeHtml(title || '')}" />
+            <meta property="og:title" content="SCP財団Wiki 日本語版" />
             <meta property="og:type" content="website" />
             <meta property="og:url" content="${request.url}" />
             <meta property="og:description" content="SCP財団日本語版Wiki" />
@@ -430,7 +458,7 @@ function clampLines(text: string, {maxLines, fontSize, maxWidth, avgCharWidthRat
 	// 最大文字数を超える場合は "..." を付けて省略
 	let processedText = text;
 	if (text.length > maxChars) {
-		processedText = text.substring(0, maxChars - 1) + "...";
+		processedText = text.substring(0, maxChars - 3) + "...";
 	}
 
 	// 計算した文字数でテキストを行に分割
