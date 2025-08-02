@@ -148,6 +148,7 @@ const handler: Handler = {
 						headers: {
 							"Content-Type": "image/png",
 							"X-R2-Cache": "HIT", // カスタムヘッダでキャッシュヒットを通知
+							"X-R2-Cache-Key": cacheKey, // キャッシュキーをヘッダに追加
 						},
 					});
 				}
@@ -161,7 +162,7 @@ const handler: Handler = {
 				return new Response("Page parameter is required", {status: 400});
 			}
 			// ページタイトルを取得するためのURLを構築
-			const pageUrl = `http://pseudo-scp-jp.wikidot.com/${encodeURIComponent(paramPage)}`;
+			const pageUrl = `http://scp-jp.wikidot.com/${encodeURIComponent(paramPage)}`;
 			const pageResponse = await fetch(pageUrl);
 			if (!pageResponse.ok) {
 				return new Response(`Failed to fetch page: ${pageUrl}`, {status: pageResponse.status});
@@ -179,22 +180,22 @@ const handler: Handler = {
 			}
 			// ページタイトルを取得
 			const pageTitle = titleMatch[1].trim();
-			// ページタイトルをエスケープしてHTML特殊文字を処理
-			const escapedTitle = escapeHtml(pageTitle);
+			// ページタイトルをアンエスケープしてHTML特殊文字を元に戻す
+			const unescapedTitle = unescapeHtml(pageTitle);
 			// ページタイトルをログに出力
-			console.log(`Extracted page title: "${escapedTitle}"`);
+			console.log(`Extracted page title: "${unescapedTitle}"`);
 
 			// SCP記事のタイトル形式 (`SCP-xxxx-JP - ZZZZZ`) を特別扱いし、
 			// 番号部分 (title) と副題部分 (subtitle) に分割する
 			const scpTitleRegex = /^(SCP-\d{3,4}-JP) - (.+)/;
-			const isSCPTitle = scpTitleRegex.test(escapedTitle);
+			const isSCPTitle = scpTitleRegex.test(unescapedTitle);
 			let title, subtitle;
 			if (isSCPTitle) {
-				const match = escapedTitle.match(scpTitleRegex);
+				const match = unescapedTitle.match(scpTitleRegex);
 				title = match![1];
 				subtitle = match![2];
 			} else {
-				title = escapedTitle;
+				title = unescapedTitle;
 				subtitle = searchParams.get("subtitle");
 			}
 
@@ -402,18 +403,20 @@ const handler: Handler = {
 // --- ヘルパー関数 ---
 
 /**
- * XSS対策のため、HTML特殊文字をエスケープします。
- * @param unsafe - エスケープ対象の文字列
- * @returns エスケープ後の安全な文字列
+ * HTMLエンティティをアンエスケープして元の文字に戻します。
+ * @param escaped - エスケープされた文字列
+ * @returns アンエスケープ後の文字列
  */
-function escapeHtml(unsafe: string | null): string {
-	if (unsafe === null) return '';
-	return unsafe
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;")
-		.replace(/'/g, "&#039;");
+function unescapeHtml(escaped: string | null): string {
+	if (escaped === null) return '';
+	return escaped
+		.replace(/&amp;/g, "&")
+		.replace(/&lt;/g, "<")
+		.replace(/&gt;/g, ">")
+		.replace(/&quot;/g, '"')
+		.replace(/&#039;/g, "'")
+		.replace(/&#x27;/g, "'")
+		.replace(/&#x2F;/g, "/");
 }
 
 /**
