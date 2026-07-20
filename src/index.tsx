@@ -100,6 +100,14 @@ const OGP_VARIANTS: OGPVariants = {
 		"fontWeight": 900,
 		"textColor": "#fff",
 		"textShadow": "0 0 10px rgba(0, 0, 0, 0.7)",
+	},
+	"event26-summer01": {
+		"backgroundImage": "bgs/ogp-bg-event26-summer01.png",
+		"fontFile": "fonts/NotoSansJP-Black.ttf",
+		"font": "Noto Sans JP",
+		"fontWeight": 900,
+		"textColor": "#fff",
+		"textShadow": "0 0 10px rgba(0, 0, 0, 0.7)",
 	}
 }
 
