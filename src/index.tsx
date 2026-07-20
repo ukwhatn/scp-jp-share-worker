@@ -135,7 +135,15 @@ const handler: Handler = {
 		// 1. 画像生成エンドポイント (/image)
 		// =============================================
 		if (pathname === '/image') {
+			// `mode=test` の場合、参照先を検証用サイト pseudo-scp-jp に切り替える
+			const isTestMode = searchParams.get("mode") === "test";
+			const wikidotHost = isTestMode ? "pseudo-scp-jp.wikidot.com" : "scp-jp.wikidot.com";
+
 			// --- キャッシュの確認 ---
+			// fullUrl には mode パラメータも含まれるため、cacheKey（ハッシュ）は本番用と検証用で
+			// 別値になり、R2キャッシュは自動的に分離される（本番キャッシュへの誤ヒットは起きない）。
+			// さらに検証用は `image-cache/test/` 配下へ隔離し、本番キャッシュと物理的に混在させない
+			// （本番キーは変更しないため既存キャッシュの無効化は発生せず、テスト画像の一括削除も容易）。
 			const fullUrl = new URL(request.url).toString();
 			// URLが長すぎる場合に備えてハッシュ化
 			const encoder = new TextEncoder();
@@ -143,13 +151,14 @@ const handler: Handler = {
 			const hashBuffer = await crypto.subtle.digest('SHA-256', data);
 			const hashArray = Array.from(new Uint8Array(hashBuffer));
 			const cacheKey = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+			const cacheObjectKey = isTestMode ? `image-cache/test/${cacheKey}` : `image-cache/${cacheKey}`;
 
 			// `nocache=true` が指定されているかどうかを確認
 			const noCacheFlag = searchParams.get("nocache") === "true";
 
 			// `nocache=true` が指定されていない場合、まずR2のキャッシュを確認
 			if (!noCacheFlag) {
-				const cache = await env.OGP_BUCKET.get(`image-cache/${cacheKey}`);
+				const cache = await env.OGP_BUCKET.get(cacheObjectKey);
 				if (cache) {
 					// キャッシュヒットした場合、その画像を返す
 					return new Response(cache.body, {
@@ -169,8 +178,8 @@ const handler: Handler = {
 			if (!paramPage || paramPage.length === 0) {
 				return new Response("Page parameter is required", {status: 400});
 			}
-			// ページタイトルを取得するためのURLを構築
-			const pageUrl = `http://scp-jp.wikidot.com/${encodeURIComponent(paramPage)}`;
+			// ページタイトルを取得するためのURLを構築（mode に応じて参照先サイトを切り替え）
+			const pageUrl = `http://${wikidotHost}/${encodeURIComponent(paramPage)}`;
 			const pageResponse = await fetch(pageUrl);
 			if (!pageResponse.ok) {
 				return new Response(`Failed to fetch page: ${pageUrl}`, {status: pageResponse.status});
@@ -334,9 +343,9 @@ const handler: Handler = {
 			// ResvgでSVGをPNGに変換 (多くのプラットフォームはSVGのOGPをサポートしていないため)
 			const png = (new Resvg(svg)).render().asPng();
 
-			// 生成した画像をR2にキャッシュする
+			// 生成した画像をR2にキャッシュする（検証用は本番と別プレフィックスに保存）
 			if (!noCacheFlag) {
-				await env.OGP_BUCKET.put(`image-cache/${cacheKey}`, png, {
+				await env.OGP_BUCKET.put(cacheObjectKey, png, {
 					httpMetadata: {contentType: "image/png"},
 				});
 			}
@@ -356,18 +365,24 @@ const handler: Handler = {
 		if (pathname === '/share') {
 			const page = searchParams.get('page');
 			const variant = searchParams.get('variant') || 'normal';
+			// `mode=test` の場合、OGP画像生成もリダイレクト先も検証用サイト pseudo-scp-jp に向ける
+			const isTestMode = searchParams.get('mode') === 'test';
+			const wikidotHost = isTestMode ? 'pseudo-scp-jp.wikidot.com' : 'scp-jp.wikidot.com';
 
 			// リダイレクト先のページ指定は必須
 			if (!page) {
 				return new Response('`page` parameter is required.', {status: 400});
 			}
 
-			// OGP画像のURLを動的に構築
+			// OGP画像のURLを動的に構築（mode=test はクローラーが叩く /image にも引き継ぐ）
 			let ogImageUrl = `${origin}/image?page=${encodeURIComponent(page)}`;
 			ogImageUrl += `&variant=${encodeURIComponent(variant)}`;
+			if (isTestMode) {
+				ogImageUrl += `&mode=test`;
+			}
 
-			// リダイレクト先のWikidot URLを構築
-			const redirectUrl = `http://scp-jp.wikidot.com/${page}`;
+			// リダイレクト先のWikidot URLを構築（mode に応じて参照先サイトを切り替え）
+			const redirectUrl = `http://${wikidotHost}/${page}`;
 
 			// OGPタグ部分を動的に生成
 			const ogpTags = ogImageUrl ? `
