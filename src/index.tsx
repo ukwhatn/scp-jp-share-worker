@@ -13,6 +13,9 @@ import satori, {init} from "satori/wasm";
 import initYoga from "yoga-wasm-web";
 import {initWasm, Resvg} from "@resvg/resvg-wasm";
 
+// タイトル解釈ヘルパー（純関数・単体テスト対象）
+import {detectScpTag, splitTitle} from "./title";
+
 // --- WASMモジュールのインポート ---
 // wrangler.tomlでの設定が複雑なため、ここではビルド時にnode_modulesから直接WASMファイルを
 // 読み込むように相対パスで指定しています。TypeScriptの型チェックエラーを回避するため、
@@ -119,6 +122,11 @@ const FONT_OPTIONS = {
 	avgCharWidthRatio: 0.7, // フォントサイズに対する平均的な文字幅の比率（経験則に基づく調整値）
 };
 
+/**
+ * R2キャッシュキーの版数。タイトル分割ロジック等を変更してキャッシュを無効化したい時にインクリメントする。
+ */
+const CACHE_VERSION = "v2";
+
 // --- メインハンドラ ---
 
 const handler: Handler = {
@@ -151,7 +159,9 @@ const handler: Handler = {
 			const hashBuffer = await crypto.subtle.digest('SHA-256', data);
 			const hashArray = Array.from(new Uint8Array(hashBuffer));
 			const cacheKey = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-			const cacheObjectKey = isTestMode ? `image-cache/test/${cacheKey}` : `image-cache/${cacheKey}`;
+			const cacheObjectKey = isTestMode
+				? `image-cache/test/${CACHE_VERSION}/${cacheKey}`
+				: `image-cache/${CACHE_VERSION}/${cacheKey}`;
 
 			// `nocache=true` が指定されているかどうかを確認
 			const noCacheFlag = searchParams.get("nocache") === "true";
@@ -202,19 +212,13 @@ const handler: Handler = {
 			// ページタイトルをログに出力
 			console.log(`Extracted page title: "${unescapedTitle}"`);
 
-			// SCP記事のタイトル形式 (`SCP-xxxx-JP - ZZZZZ`) を特別扱いし、
-			// 番号部分 (title) と副題部分 (subtitle) に分割する
-			const scpTitleRegex = /^(SCP-\d{3,4}-JP) - (.+)/;
-			const isSCPTitle = scpTitleRegex.test(unescapedTitle);
-			let title, subtitle;
-			if (isSCPTitle) {
-				const match = unescapedTitle.match(scpTitleRegex);
-				title = match![1];
-				subtitle = match![2];
-			} else {
-				title = unescapedTitle;
-				subtitle = searchParams.get("subtitle");
-			}
+			// SCPタグ付き記事は「番号 - メタタイトル」形式が慣例。最初の ' - ' で分割し、
+			// 番号部分 (title) と副題部分 (subtitle) に振り分ける。
+			// SCPタグが無い or ' - ' を含まない場合は分割せず、subtitleはクエリパラメータで補完する。
+			const hasScpTag = detectScpTag(pageText);
+			const split = splitTitle(unescapedTitle, hasScpTag);
+			const title = split.title;
+			const subtitle = split.subtitle ?? searchParams.get("subtitle");
 
 			// バリアントの指定を取得 (デフォルトは "normal")
 			const variant = searchParams.get("variant") || "normal";
